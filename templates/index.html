@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Submit audio - ConsultBae</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto;
+         padding: 0 1rem; line-height: 1.5; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input[type=text], input[type=tel] { width: 100%; padding: .5rem; font-size: 1rem; }
+  button { padding: .6rem 1.1rem; font-size: 1rem; margin-top: 1rem; cursor: pointer; }
+  #rec.recording { background: #c0392b; color: #fff; }
+  .box { border: 1px solid #ccc; padding: 1rem; margin-top: 1.5rem; border-radius: 6px; }
+  .err { color: #c0392b; } .ok { color: #1e7e34; }
+  pre { background: #f4f4f4; padding: .75rem; overflow-x: auto; font-size: .85rem; }
+  .muted { color: #666; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Submit a recording</h1>
+<p class="muted">Record in the browser or upload a file. <a href="/submissions">View all submissions</a></p>
+
+<form id="f">
+  <label>Name <input type="text" name="name" required></label>
+  <label>Phone number <input type="tel" name="phone" required placeholder="9000000254"></label>
+
+  <div class="box">
+    <strong>Option A - record now</strong><br>
+    <button type="button" id="rec">Start recording</button>
+    <span id="timer" class="muted"></span>
+    <div id="preview"></div>
+  </div>
+
+  <div class="box">
+    <strong>Option B - upload a file</strong><br>
+    <input type="file" id="file" accept="audio/*">
+  </div>
+
+  <button type="submit" id="send">Submit</button>
+</form>
+
+<div id="out"></div>
+
+<script>
+let recorder = null, chunks = [], recordedBlob = null, timerId = null, seconds = 0;
+const recBtn = document.getElementById('rec');
+const out = document.getElementById('out');
+
+recBtn.onclick = async () => {
+  if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+  try {
+    // Requires a secure context. localhost counts as secure; a plain-http
+    // LAN address does not, which is why ngrok is the fallback for demos.
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());   // release the mic light
+      recordedBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      document.getElementById('preview').innerHTML =
+        '<p class="muted">Recorded ' + seconds + 's</p>' +
+        '<audio controls src="' + URL.createObjectURL(recordedBlob) + '"></audio>';
+      recBtn.textContent = 'Start recording';
+      recBtn.classList.remove('recording');
+      clearInterval(timerId);
+      document.getElementById('timer').textContent = '';
+    };
+    recorder.start();
+    seconds = 0;
+    timerId = setInterval(() => {
+      seconds++;
+      document.getElementById('timer').textContent = seconds + 's';
+    }, 1000);
+    recBtn.textContent = 'Stop recording';
+    recBtn.classList.add('recording');
+  } catch (err) {
+    out.innerHTML = '<p class="err">Microphone unavailable: ' + err.message +
+                    '. Use the file upload instead.</p>';
+  }
+};
+
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const fileInput = document.getElementById('file');
+  const fd = new FormData();
+  fd.append('name', e.target.name.value);
+  fd.append('phone', e.target.phone.value);
+
+  if (fileInput.files.length > 0) {
+    fd.append('audio', fileInput.files[0]);
+  } else if (recordedBlob) {
+    // MediaRecorder gives webm/opus; the server transcodes before analysing.
+    fd.append('audio', recordedBlob, 'recording.webm');
+  } else {
+    out.innerHTML = '<p class="err">Record something or choose a file first.</p>';
+    return;
+  }
+
+  document.getElementById('send').disabled = true;
+  out.innerHTML = '<p class="muted">Uploading and analysing...</p>';
+  try {
+    const res = await fetch('/submit', { method: 'POST', body: fd });
+    const j = await res.json();
+    if (!j.ok) {
+      out.innerHTML = '<p class="err">' + j.error + '</p>';
+    } else {
+      const who = j.matched_person
+        ? 'Matched to <strong>' + j.matched_person.full_name + '</strong> (person ' +
+          j.matched_person.person_id + ')'
+        : '<span class="muted">No matching person in the database - stored unlinked.</span>';
+      out.innerHTML = '<div class="box"><p class="ok">Saved as submission #' +
+        j.submission_id + '.</p><p>' + who + '</p><pre>' +
+        JSON.stringify(j.properties, null, 2) + '</pre>' +
+        '<a href="/submissions">See all submissions</a></div>';
+    }
+  } catch (err) {
+    out.innerHTML = '<p class="err">Upload failed: ' + err.message + '</p>';
+  } finally {
+    document.getElementById('send').disabled = false;
+  }
+};
+</script>
+</body>
+</html>

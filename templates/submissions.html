@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Submissions - ConsultBae</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2rem auto;
+         padding: 0 1rem; line-height: 1.4; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { border: 1px solid #ddd; padding: .5rem; text-align: left; vertical-align: middle; }
+  th { background: #f4f4f4; }
+  audio { width: 200px; }
+  .muted { color: #888; }
+  .clean { color: #1e7e34; font-weight: 600; }
+  .fair  { color: #b8860b; font-weight: 600; }
+  .noisy { color: #c0392b; font-weight: 600; }
+  .unlinked { color: #c0392b; }
+</style>
+</head>
+<body>
+<h1>All submissions</h1>
+<p><a href="/">&larr; Submit another</a> &middot; {{ rows|length }} total</p>
+
+{% if not rows %}
+  <p class="muted">Nothing submitted yet.</p>
+{% else %}
+<table>
+  <tr>
+    <th>#</th><th>Play</th><th>Submitted as</th><th>Phone</th><th>Linked person</th>
+    <th>Duration</th><th>Sample rate</th><th>Bitrate</th><th>Loudness</th><th>Quality</th>
+  </tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.submission_id }}</td>
+    <td><audio controls preload="none" src="{{ url_for('audio_file', name=r.file_path) }}"></audio></td>
+    <td>{{ r.submitted_name }}</td>
+    <td>{{ r.submitted_phone }}</td>
+    <td>
+      {% if r.person_id %}
+        {{ r.person_name }} <span class="muted">(#{{ r.person_id }}, {{ r.person_city }})</span>
+      {% else %}
+        <span class="unlinked">no match</span>
+      {% endif %}
+    </td>
+    <td>{% if r.duration_sec %}{{ '%.2f'|format(r.duration_sec) }} s{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td>{% if r.sample_rate_khz %}{{ r.sample_rate_khz }} kHz{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td>{% if r.bitrate_kbps %}{{ '%.0f'|format(r.bitrate_kbps) }} kbps{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td>{% if r.loudness_db is not none %}{{ '%.1f'|format(r.loudness_db) }} dB{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td>{% if r.noise_estimate %}<span class="{{ r.noise_estimate }}">{{ r.noise_estimate }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+</body>
+</html>
