@@ -155,6 +155,112 @@ def audio_file(name):
 def too_large(e):
     return jsonify(ok=False, error="File is larger than 25 MB."), 413
 
+# ---------------------------------------------------------------- Task 2 API
+# Endpoints consumed by the n8n LLM tagging flow.
+#
+# Why n8n talks to HTTP instead of the SQLite file directly:
+# n8n has no native SQLite node, and pointing a second process at the same
+# file invites write-lock contention. Going through the app keeps one writer
+# and means the same validation applies no matter who is calling.
+
+# Shared secret. n8n sends it as an X-API-Key header. This is a demo-grade
+# guard, not real auth - it stops a stray request from rewriting the database,
+# nothing more.
+API_KEY = os.environ.get("CB_API_KEY", "dev-key-change-me")
+
+VALID_CATEGORIES = {"automation-heavy", "web dev", "data", "unclear"}
+
+
+def _check_key():
+    return request.headers.get("X-API-Key") == API_KEY
+
+
+@app.route("/api/untagged")
+def api_untagged():
+    """
+    People who still need a skill_category, with their skills attached.
+
+    n8n pages through this: it takes a batch, tags it, writes back, and calls
+    again. `limit` caps the batch so one run cannot blow up the LLM step.
+    """
+    if not _check_key():
+        return jsonify(ok=False, error="bad or missing X-API-Key"), 401
+
+    try:
+        limit = min(int(request.args.get("limit", 10)), 100)
+    except ValueError:
+        limit = 10
+
+    rows = db().execute(
+        "SELECT p.person_id, p.full_name, p.city,"
+        "       group_concat(ps.skill_name, ', ') AS skills"
+        " FROM person p"
+        " LEFT JOIN person_skill ps ON ps.person_id = p.person_id"
+        " WHERE p.skill_category IS NULL"
+        " GROUP BY p.person_id"
+        " HAVING skills IS NOT NULL"      # nothing to classify without skills
+        " ORDER BY p.person_id"
+        " LIMIT ?", (limit,)
+    ).fetchall()
+
+    return jsonify(
+        ok=True,
+        count=len(rows),
+        remaining=db().execute(
+            "SELECT COUNT(*) FROM person WHERE skill_category IS NULL"
+        ).fetchone()[0],
+        people=[dict(r) for r in rows],
+    )
+
+
+@app.route("/api/tag", methods=["POST"])
+def api_tag():
+    """
+    Write categories back. Accepts one object or a list of them:
+        {"person_id": 3, "skill_category": "data"}
+
+    Unknown categories are rejected rather than stored. An LLM will happily
+    invent a fourth category, and letting that into the database would make
+    the column useless for filtering.
+    """
+    if not _check_key():
+        return jsonify(ok=False, error="bad or missing X-API-Key"), 401
+
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify(ok=False, error="expected a JSON body"), 400
+    if isinstance(payload, dict):
+        payload = [payload]
+
+    conn = db()
+    updated, rejected = 0, []
+    for item in payload:
+        pid = item.get("person_id")
+        cat = (item.get("skill_category") or "").strip().lower()
+        if cat not in VALID_CATEGORIES:
+            rejected.append({"person_id": pid, "reason": f"unknown category {cat!r}"})
+            continue
+        cur = conn.execute(
+            "UPDATE person SET skill_category = ?, tagged_at = datetime('now')"
+            " WHERE person_id = ?", (cat, pid)
+        )
+        if cur.rowcount:
+            updated += 1
+        else:
+            rejected.append({"person_id": pid, "reason": "no such person"})
+    conn.commit()
+
+    return jsonify(ok=True, updated=updated, rejected=rejected)
+
+
+@app.route("/api/tagged")
+def api_tagged():
+    """Read-back endpoint, so the video can show the results landing."""
+    rows = db().execute(
+        "SELECT person_id, full_name, skill_category, tagged_at FROM person"
+        " WHERE skill_category IS NOT NULL ORDER BY tagged_at DESC"
+    ).fetchall()
+    return jsonify(ok=True, count=len(rows), people=[dict(r) for r in rows])
 
 if __name__ == "__main__":
     if not DB_PATH.exists():
